@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
+[RequireComponent(typeof(Rigidbody)), RequireComponent(typeof(PlayerInput))]
 public class SpaceShipController : MonoBehaviour
 {
     private PlayerInput _playerInput;
@@ -11,17 +12,31 @@ public class SpaceShipController : MonoBehaviour
     public float speedChangeRate = 10.0f;
     public float speedSlowdownRate = 2.0f;
     public float rotationSmoothTime = 0.12f;
-    public float altitudeChangeSpeed = 5;
+    public float altitudeChangeSpeed = 5.0f;
+    public float turnPitch = 15.0f;
+    public float altitudeChangePitch = 30.0f;
+
+    [SerializeField]
+    private float _meshRotationSpeed = 5.0f;
+    [SerializeField]
+    private float _meshRotationSmoothTime = 0.2f;
+    [SerializeField]
+    private float _meshRotationThreshold;
 
     [SerializeField] private GameObject _playerMesh;
+    [SerializeField] private ParticleSystem _enginePs;
+
 
     //Player
     private float _speed;
     private float _targetRotation;
     private float _targetAltitude;
     private float _rotationVelocity;
+    private Vector2 _lookVelocity;
     private float _velocityChangeRate;
-    private Rigidbody rb;
+    private Rigidbody _rb;
+    private Vector2 _currentInputVector;
+    private float _altitudeLerpRate = 0.0f;
 
     //Camera
     private float _cameraTargetYaw;
@@ -47,7 +62,7 @@ public class SpaceShipController : MonoBehaviour
     private void Start()
     {
         _playerInput = GetComponent<PlayerInput>();
-        rb = GetComponent<Rigidbody>();
+        _rb = GetComponent<Rigidbody>();
     }
 
     private void FixedUpdate()
@@ -57,6 +72,7 @@ public class SpaceShipController : MonoBehaviour
 
     private void LateUpdate()
     {
+        RotateMesh();
         CameraRotation();
     }
 
@@ -68,14 +84,16 @@ public class SpaceShipController : MonoBehaviour
         {
             targetSpeed = 0.0f;
             _velocityChangeRate = speedSlowdownRate;
-            rb.angularVelocity = Vector3.zero;
+            _rb.angularVelocity = Vector3.zero;
+            if (_enginePs.isPlaying)
+                _enginePs.Stop();
         }
         else
         {
             _velocityChangeRate = speedChangeRate;
         }
 
-        float currentHorizontalSpeed = new Vector3(rb.velocity.x, 0.0f, rb.velocity.z).magnitude;
+        float currentHorizontalSpeed = new Vector3(_rb.velocity.x, 0.0f, _rb.velocity.z).magnitude;
 
         float speedOffset = 0.1f;
         float inputMagnitude = _playerInput.analogMovement ? _playerInput.move : 1.0f;
@@ -94,58 +112,104 @@ public class SpaceShipController : MonoBehaviour
         if (_playerInput.move != 0f)
         {
             _targetRotation = _mainCamera.transform.eulerAngles.y;
-            float rotation = Mathf.SmoothDampAngle(rb.transform.eulerAngles.y, _targetRotation, ref _rotationVelocity, rotationSmoothTime);
+            float rotation = Mathf.SmoothDampAngle(_rb.transform.eulerAngles.y, _targetRotation, ref _rotationVelocity, rotationSmoothTime);
             
-            rb.MoveRotation(Quaternion.Euler(new Vector3(0.0f, rotation, 0.0f)));
-
-            Vector2 lookRotation = _playerInput.look;
-
-            if (lookRotation.x > 0)
-            {
-                Quaternion rot = Quaternion.Slerp(_playerMesh.transform.localRotation, 
-                    Quaternion.Euler(0, 0, -15), 5 * Time.deltaTime);
-                _playerMesh.transform.localRotation = rot;
-            }
-            else if (lookRotation.x < 0)
-            {
-                Quaternion rot = Quaternion.Slerp(_playerMesh.transform.localRotation,
-                    Quaternion.Euler(0, 0, 15), 5 * Time.deltaTime);
-                _playerMesh.transform.localRotation = rot;
-            }
-            else
-            {
-                Quaternion rot = Quaternion.Slerp(_playerMesh.transform.localRotation, 
-                    Quaternion.Euler(_playerMesh.transform.localRotation.x, 0 , 0), 5 * Time.deltaTime);
-                _playerMesh.transform.localRotation = rot;
-            }
-            
+            _rb.MoveRotation(Quaternion.Euler(new Vector3(0.0f, rotation, 0.0f)));
         }
 
         if (_playerInput.altitude != 0)
         {
-            _targetAltitude = Mathf.Lerp(_targetAltitude, _playerInput.altitude, speedChangeRate * Time.deltaTime);
-            rb.AddForce(new Vector3(0, _targetAltitude, 0) * altitudeChangeSpeed);
+            _altitudeLerpRate += 0.5f * Time.deltaTime;
 
-            Quaternion rot = Quaternion.Slerp(_playerMesh.transform.localRotation, 
-                Quaternion.Euler(-_targetAltitude * 30, 0, _playerMesh.transform.localRotation.z), 5 * Time.deltaTime);
-            _playerMesh.transform.localRotation = rot;
+            _targetAltitude = Mathf.Lerp(_targetAltitude, _playerInput.altitude, _altitudeLerpRate);
+
+            if (_altitudeLerpRate > 1f)
+                _targetAltitude = _playerInput.altitude;
+
+            _rb.AddForce(new Vector3(0, _targetAltitude, 0) * altitudeChangeSpeed);
         }
         else
         {
+            _altitudeLerpRate = 0f;
             if (_targetAltitude > 0.01f | _targetAltitude < -0.01f)
             {
-                _targetAltitude = Mathf.Lerp(_targetAltitude, 0.0f, speedChangeRate * Time.deltaTime);
-                rb.AddForce(new Vector3(0, _targetAltitude, 0) * altitudeChangeSpeed);
+                _altitudeLerpRate += 0.5f * Time.deltaTime;
 
-                Quaternion rot = Quaternion.Slerp(_playerMesh.transform.localRotation, 
-                    Quaternion.Euler(0, 0, _playerMesh.transform.localRotation.z), 5 * Time.deltaTime);
-                _playerMesh.transform.localRotation = rot;
+                if (_altitudeLerpRate > 1f)
+                    _targetAltitude = 0f;
+
+                _targetAltitude = Mathf.Lerp(_targetAltitude, 0.0f, speedChangeRate * Time.deltaTime);
+                _rb.AddForce(new Vector3(0, _targetAltitude, 0) * altitudeChangeSpeed);
             }
         }
 
         Vector3 targetDirection = Quaternion.Euler(0, _targetRotation, 0.0f) * Vector3.forward;
 
-        rb.velocity = targetDirection.normalized * _speed;
+        _rb.velocity = targetDirection.normalized * _speed;
+    }
+
+    
+    private void RotateMesh()
+    {
+        if (_playerInput.move != 0)
+        {
+            _currentInputVector = Vector2.SmoothDamp(_currentInputVector, _playerInput.look, ref _lookVelocity, _meshRotationSmoothTime);
+            if (_currentInputVector.x <= _meshRotationThreshold && _currentInputVector.x >= -_meshRotationThreshold)
+            {
+                _currentInputVector.x = 0;
+            }
+
+            Quaternion zToRotation;
+            Quaternion xToRotation = Quaternion.identity;
+
+            if (_currentInputVector.x > 0)
+            {
+                zToRotation = Quaternion.Euler(_playerMesh.transform.localRotation.x, 0, -turnPitch);
+            }
+            else if (_currentInputVector.x < 0)
+            {
+                zToRotation = Quaternion.Euler(_playerMesh.transform.localRotation.x, 0, turnPitch);
+            }
+            else
+            {
+                zToRotation = Quaternion.Euler(_playerMesh.transform.localRotation.x, 0, 0);
+            }
+
+            if (_playerInput.altitude != 0)
+            {
+                xToRotation = Quaternion.Euler(-_targetAltitude * altitudeChangePitch, 0, _playerMesh.transform.localRotation.z);
+            }
+            else
+            {
+                if (_targetAltitude > 0.01f | _targetAltitude < -0.01f)
+                {
+                    xToRotation = Quaternion.Euler(0, 0, _playerMesh.transform.localRotation.z);
+                }
+            }
+
+            Quaternion endRotation = xToRotation * zToRotation;
+            
+            if (_playerMesh.transform.localRotation != endRotation)
+            {
+                _playerMesh.transform.localRotation = 
+                    Quaternion.RotateTowards(_playerMesh.transform.localRotation, endRotation, _meshRotationSpeed * Time.deltaTime);
+            }
+
+            if (!_enginePs.isPlaying)
+                _enginePs.Play();
+        }
+        else
+        {
+            if (_playerMesh.transform.localRotation.z != 0f)
+            {
+                Quaternion toRotation = Quaternion.Euler(new Vector3(_playerMesh.transform.localRotation.x, 0f, _playerMesh.transform.localRotation.z));
+
+                _playerMesh.transform.localRotation = 
+                    Quaternion.RotateTowards(_playerMesh.transform.localRotation, toRotation, _meshRotationSpeed * Time.deltaTime);
+
+                _currentInputVector = Vector2.zero;
+            }
+        }
     }
 
     void CameraRotation()

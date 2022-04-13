@@ -10,10 +10,13 @@ namespace PoolManager
         [System.Serializable]
         public struct PoolStruct
         {
+            public string m_PoolName;
             public GameObject m_Prefab;
             public int m_Size;
             [Tooltip("If true, once the pool has used all of its GameObjects, re-use the first active one. Otherwise grow the pool.")]
             public bool m_LimitReachUseActiveObject;
+            [Tooltip("If true, parent all of the pooled objects under an empty GameObject.")]
+            public bool m_AutoParentObjects;
         }
 
         private List<PoolStruct> m_Pools = new List<PoolStruct>();
@@ -69,18 +72,33 @@ namespace PoolManager
 
         private void GrowPool(PoolStruct pool)
         {
-            for (int i = 0; i < pool.m_Size; i++)
+            if (pool.m_AutoParentObjects)
             {
-                CreatePooledObject(pool.m_Prefab);
+                GameObject poolParent = new GameObject(pool.m_PoolName + " Pool");
+                for (int i = 0; i < pool.m_Size; i++)
+                {
+                    CreatePooledObject(pool.m_Prefab, poolParent.transform);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < pool.m_Size; i++)
+                {
+                    CreatePooledObject(pool.m_Prefab);
+                }
             }
         }
 
-        private void CreatePooledObject(GameObject poolPrefab)
+        /// <summary>
+        /// Creates a pooled object that is parented to the poolParent.
+        /// </summary>
+        /// <param name="poolPrefab">The prefab to create.</param>
+        /// <param name="poolParent">The parent which the prefabs will be parented to.</param>
+        private void CreatePooledObject(GameObject poolPrefab, Transform poolParent)
         {
-            GameObject pooledGameObject = Instantiate(poolPrefab);
-            PooledObject pooledScript = pooledGameObject.GetComponent<PooledObject>();
-
-            if (pooledScript == null)
+            GameObject pooledGameObject = Instantiate(poolPrefab, poolParent.transform);
+            
+            if (!pooledGameObject.TryGetComponent(out PooledObject pooledScript))
             {
                 Debug.LogErrorFormat("Invalid Prefab for PoolManager: The prefab {0} should be derived from PooledObject.", poolPrefab.name);
                 Destroy(pooledGameObject);
@@ -93,19 +111,73 @@ namespace PoolManager
             }
         }
 
-        public T UseObjectFromPool<T>(GameObject prefab, Vector3 position, Quaternion rotation)
+        private void CreatePooledObject(GameObject poolPrefab)
         {
-            GameObject pooledObject = UseObjectFromPool(prefab, position, rotation);
+            GameObject pooledGameObject = Instantiate(poolPrefab);
+            
+            if (!pooledGameObject.TryGetComponent(out PooledObject pooledScript))
+            {
+                Debug.LogErrorFormat("Invalid Prefab for PoolManager: The prefab {0} should be derived from PooledObject.", poolPrefab.name);
+                Destroy(pooledGameObject);
+            }
+            else
+            {
+                pooledScript.InitPooledObject(poolPrefab);
+                pooledGameObject.SetActive(false);
+                m_PoolsObjects[poolPrefab].Add(pooledGameObject); ;
+            }
+        }
+
+        /// <summary>
+        /// Gets a component from a pooled object.
+        /// </summary>
+        /// <typeparam name="T">The component to get.</typeparam>
+        /// <param name="prefab">The pooled prefab to get the component from.</param>
+        /// <returns></returns>
+        public T UseObjectFromPool<T>(GameObject prefab)
+        {
+            GameObject pooledObject = UseObjectFromPool(prefab);
             return pooledObject.GetComponent<T>();
         }
 
-        public GameObject UseObjectFromPool(GameObject prefab, Vector3 position, Quaternion rotation)
+        /// <summary>
+        /// Get a GameObject from the pool and set the position and rotation.
+        /// </summary>
+        /// <param name="prefab">The prefab to get from the pool.</param>
+        /// <param name="position">The position to set the GameObject to.</param>
+        /// <param name="rotation">The rotation to set the GameObject to.</param>
+        /// <param name="useLocalPosition">If true will set the local position of the GameObject.</param>
+        /// <returns></returns>
+        public GameObject UseObjectFromPool(GameObject prefab, Vector3 position, Quaternion rotation, bool useLocalPosition = false)
         {
             GameObject pooledObject = GetObjectFromPool(prefab);
 
             if (pooledObject != null)
             {
-                pooledObject.transform.SetPositionAndRotation(position, rotation);
+                if (useLocalPosition)
+                {
+                    pooledObject.transform.localPosition = position;
+                    pooledObject.transform.localRotation = rotation;
+                    pooledObject.SetActive(true);
+                }
+                else
+                {
+                    pooledObject.transform.SetPositionAndRotation(position, rotation);
+                    pooledObject.SetActive(true);
+                }
+
+                m_PoolsActiveObjects[prefab].Add(pooledObject);
+            }
+
+            return pooledObject;
+        }
+
+        private GameObject UseObjectFromPool(GameObject prefab)
+        {
+            GameObject pooledObject = GetObjectFromPool(prefab);
+
+            if (pooledObject != null)
+            {
                 pooledObject.SetActive(true);
 
                 m_PoolsActiveObjects[prefab].Add(pooledObject);
